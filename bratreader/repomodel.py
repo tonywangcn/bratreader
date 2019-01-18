@@ -1,9 +1,13 @@
-
-from annotateddocument import AnnotatedDocument
-from annotationimporter import importann
+from bratreader.annotateddocument import AnnotatedDocument
+from bratreader.annotationimporter import importann
 from glob import glob
 import fnmatch
-import cPickle as pickle
+
+try:
+    import cPickle as pickle
+except:
+    import _pickle as pickle
+
 import pathlib
 
 import os

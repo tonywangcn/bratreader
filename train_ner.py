@@ -6,7 +6,9 @@ import random
 import spacy
 from spacy.pipeline import EntityRecognizer
 from spacy.gold import GoldParse
-from spacy.tagger import Tagger
+from spacy.pipeline import Tagger
+from spacy.util import minibatch, compounding
+
 from itertools import islice
 import os
 
@@ -63,60 +65,50 @@ def normalize_tags(nlp, train_data, exclude_tags):
 					break
 			if not overlap:
 				entity_offsets.append((ent.start_char, ent.end_char, ent.label_))
-		yield (raw_text, entity_offsets)
 
-def train_ner(nlp, train_data, entity_types):
-	'''
-	param: entity_types is a list of entities included for training (all caps)
-	train NER with data formatted as:
-	[
-	('text', [(begin, end, LABEL),(begin, end, LABEL)]),
-	('Who is Shaka Khan?',[(len('Who is '), len('Who is Shaka Khan'), 'PERSON')])
-	]
-	'''
-	# Add new words to vocab.
-	for raw_text, _ in train_data:
-		doc = nlp.make_doc(raw_text)
-		for word in doc:
-			_ = nlp.vocab[word.orth]
+		yield (raw_text, {"entities": entity_offsets })
 
-	# Add unknown entity types to model
-	for entity_type in entity_types:
-		if entity_type not in nlp.entity.cfg['actions']['1']:
-			if not 'extra_labels' in nlp.entity.cfg or 'extra_labels' in nlp.entity.cfg and entity_type not in nlp.entity.cfg['extra_labels']:
-				#print(entity_type)
-				nlp.entity.add_label(entity_type)
+def train_ner(nlp, train_data, entity_types,n_iter=1000):
+	if "ner" not in nlp.pipe_names:
+		ner = nlp.create_pipe("ner")
+		nlp.add_pipe(ner, last=True)
+	# otherwise, get it so we can add labels
+	else:
+		ner = nlp.get_pipe("ner")
 
-	random.seed(0)
+	# add labels
+	for _, annotations in train_data:
+		for ent in annotations.get("entities"):
+				ner.add_label(ent[2])
 
-	nlp.entity.model.learn_rate = 0.001
-	for itn in range(1000):
-		random.shuffle(train_data)
-		loss = 0.
-		for raw_text, entity_offsets in train_data:
-			doc = nlp.make_doc(raw_text)
-			gold = GoldParse(doc, entities=entity_offsets)
-			# By default, the GoldParse class assumes that the entities
-			# described by offset are complete, and all other words should
-			# have the tag 'O'. You can tell it to make no assumptions
-			# about the tag of a word by giving it the tag '-'.
-			# However, this allows a trivial solution to the current
-			# learning problem: if words are either 'any tag' or 'ANIMAL',
-			# the model can learn that all words can be tagged 'ANIMAL'.
-			#for i in range(len(gold.ner)):
-				#if not gold.ner[i].endswith('ANIMAL'):
-				#    gold.ner[i] = '-'
-			nlp.tagger(doc)
-			# As of 1.9, spaCy's parser now lets you supply a dropout probability
-			# This might help the model generalize better from only a few
-			# examples.
-			loss += nlp.entity.update(doc, gold, drop=0.5)
-		print(loss)
-		if loss < 300:
-			break
-	# This step averages the model's weights. This may or may not be good for
-	# your situation --- it's empirical.
-	#nlp.end_training()
+	# get names of other pipes to disable them during training
+	other_pipes = [pipe for pipe in nlp.pipe_names if pipe != "ner"]
+	with nlp.disable_pipes(*other_pipes):  # only train NER
+		# reset and initialize the weights randomly – but only if we're
+		# training a new model
+
+		# if model is None:
+		nlp.begin_training()
+
+		for itn in range(n_iter):
+			random.shuffle(train_data)
+			losses = {}
+			# batch up the examples using spaCy's minibatch
+			batches = minibatch(train_data, size=compounding(4.0, 32.0, 1.001))
+			for batch in batches:
+				texts, annotations = zip(*batch)
+
+				print(batch)
+				print(texts)
+				print(annotations)
+
+				nlp.update(
+					texts,  # batch of texts
+					annotations,  # batch of annotations
+					drop=0.5,  # dropout - make it harder to memorise data
+					losses=losses,
+				)
+				print("Losses", losses)
 
 	return nlp
 
@@ -137,7 +129,7 @@ def main(data_dir, model_dir=None, exclude_normalize_tags=None, keys={}):
 	
 	r = RepoModel(data_dir, recursive=True, cached=False)
 
-	nlp = spacy.load('en')
+	nlp = spacy.load('en_default')
 
 	# v1.1.2 onwards
 	if nlp.tagger is None:
@@ -157,6 +149,8 @@ def main(data_dir, model_dir=None, exclude_normalize_tags=None, keys={}):
 		else:
 			normalized_train_data.extend(get_annotated_sents(data, keys))
 
+	# print(normalized_train_data)
+
 	nlp = train_ner(nlp, normalized_train_data, keys.values())
 
 	doc = nlp(u"Hi Adam,\nSounds great to me. I'll send through the QA department. In the invite you through Skype, and we can discuss if Applause is right for you.\nI look forward to it!\nRegards,\nAndrew")
@@ -168,5 +162,5 @@ def main(data_dir, model_dir=None, exclude_normalize_tags=None, keys={}):
 
 if __name__ == '__main__':
 	excludes = ["PERSON", "ORG", "GPE"] #have manually tagged these in BRAT, don't need to "normalize"
-	data_path = YOUR_BRAT_DATA_PATH
+	data_path = "/home/jovyan/work/jobs/"
 	main(data_dir = data_path, model_dir='ner', exclude_normalize_tags=excludes, keys = BRAT_TO_SPACY_KEYS)
