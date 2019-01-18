@@ -22,9 +22,15 @@ def importann(pathtofile):
 
     char_index = 0
 
-    for sent_index, line in enumerate(open(path + ".txt", encoding='utf-8')):
-        sentences.append(Sentence(sent_index, line, char_index))
-        char_index += len(line)
+    ##this is a horrible hack because i want to preserve newlines
+    with open(path + ".txt", encoding = 'utf8') as f:
+        for sent_index, line in enumerate(f.read().split('\n\n')):
+            sentences.append(Sentence(sent_index, line, char_index))
+            char_index += len(line)+len('\n\n')
+
+    # for sent_index, line in enumerate(open(path + ".txt", encoding='utf-8')):
+    #     sentences.append(Sentence(sent_index, line, char_index))
+    #     char_index += len(line)
 
     _join(annotations.values(), sentences)
     return sentences
